@@ -17,7 +17,7 @@ type Command struct {
 	TopicArn    string `short:"t" long:"topic-arn" description:"The ARN of the SNS topic where lifecycle hooks are delivered." required:"true"`
 	InstanceID  string `short:"i" long:"instance-id" description:"The instance ID for which to listen for lifecycle hook events."`
 	JSONLogging bool   `short:"j" long:"json" description:"Enable JSON logging."`
-	Verbose     bool   `short:"v" long:"verbose" description:"Enable verbose (debug) logging."`
+	Verbose     []bool `short:"v" long:"verbose" description:"Enable verbose (debug) logging."`
 }
 
 func main() {
@@ -39,7 +39,12 @@ func main() {
 	if cmd.JSONLogging {
 		logger.Formatter = &logrus.JSONFormatter{}
 	}
-	if cmd.Verbose {
+	switch len(cmd.Verbose) {
+	case 0:
+		logger.SetLevel(logrus.WarnLevel)
+	case 1:
+		logger.SetLevel(logrus.InfoLevel)
+	default:
 		logger.SetLevel(logrus.DebugLevel)
 	}
 

@@ -33,24 +33,24 @@ func (d *Daemon) Start(ctx context.Context) error {
 	queueName := fmt.Sprintf("aws-lifecycle-%s", d.instanceID)
 
 	// Create the SQS queue
-	d.log.Infof("creating queue: %s", queueName)
+	d.log.WithField("queueName", queueName).Info("creating queue")
 	if err := d.queue.Create(queueName, d.topicArn); err != nil {
 		return fmt.Errorf("failed to create queue: %s", err)
 	}
 	defer func() {
-		d.log.Infof("deleting queue: %s", queueName)
+		d.log.WithField("queueName", queueName).Info("deleting queue")
 		if err := d.queue.Delete(); err != nil {
 			d.log.WithError(err).Error("failed to delete queue")
 		}
 	}()
 
 	// Subscribe to the STS topic
-	d.log.Infof("subscribing to topic: %s", d.topicArn)
+	d.log.WithField("topicArn", d.topicArn).Info("subscribing to topic")
 	if err := d.queue.Subscribe(d.topicArn); err != nil {
 		return fmt.Errorf("failed to subscribe to the sns topic: %s", err)
 	}
 	defer func() {
-		d.log.Infof("unsubscribing from topic: %s", d.topicArn)
+		d.log.WithField("topicArn", d.topicArn).Info("unsubscribing from topic")
 		if err := d.queue.Unsubscribe(); err != nil {
 			d.log.WithError(err).Error("failed to unsubscribe from sns topic")
 		}
@@ -68,6 +68,7 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.wg.Add(1)
 
 	// Wait until all processes have completed before returning
+	d.log.Info("Daemon started successfully!")
 	d.wg.Wait()
 	return nil
 }
@@ -106,7 +107,7 @@ func (d *Daemon) Process(ctx context.Context, messages <-chan *Message) {
 		if m.InstanceID != d.instanceID || m.Transition != "autoscaling:EC2_INSTANCE_TERMINATING" {
 			d.log.Infof("skipping notice: %s with target: %s", m.Transition, m.InstanceID)
 		}
-		d.log.Debug("DO SOME STUFF!")
+		d.log.Info("DO SOME STUFF!")
 	}
 	d.log.Debug("stopping handler...")
 }
