@@ -41,7 +41,7 @@ const queuePolicyDocument = `
 }
 `
 
-// Queue represents the SQS queue for a particular instance
+// Queue manages API calls to handle the SQS queue and SNS subscription.
 type Queue struct {
 	URL             string
 	Arn             string
@@ -51,7 +51,7 @@ type Queue struct {
 	snsClient SNSClient
 }
 
-// NewQueue creates a new queue which can be subscribed to SNS.
+// NewQueue ...
 func NewQueue(sess *session.Session) *Queue {
 	return &Queue{
 		sqsClient: sqs.New(sess),
@@ -59,7 +59,7 @@ func NewQueue(sess *session.Session) *Queue {
 	}
 }
 
-// Create the queue
+// Create the SQS queue.
 func (q *Queue) Create(name, topicArn string) error {
 	out, err := q.sqsClient.CreateQueue(&sqs.CreateQueueInput{
 		QueueName: aws.String(name),
@@ -77,7 +77,7 @@ func (q *Queue) Create(name, topicArn string) error {
 	return nil
 }
 
-// getArn for the queue
+// getArn for the SQS queue.
 func (q *Queue) getArn() (string, error) {
 	if q.Arn == "" {
 		out, err := q.sqsClient.GetQueueAttributes(&sqs.GetQueueAttributesInput{
@@ -96,7 +96,7 @@ func (q *Queue) getArn() (string, error) {
 	return q.Arn, nil
 }
 
-// Subscribe queue to the SNS topic
+// Subscribe the SQS queue to a SNS topic.
 func (q *Queue) Subscribe(topicArn string) error {
 	arn, err := q.getArn()
 	if err != nil {
@@ -114,7 +114,7 @@ func (q *Queue) Subscribe(topicArn string) error {
 	return nil
 }
 
-// getMessage from the queue
+// getMessage long polls a message from the queue.
 func (q *Queue) getMessage(ctx context.Context) ([]*Message, error) {
 	var messages []*Message
 
@@ -136,6 +136,7 @@ func (q *Queue) getMessage(ctx context.Context) ([]*Message, error) {
 	return messages, nil
 }
 
+// deleteMessage from the SQS queue (given a receipt).
 func (q *Queue) deleteMessage(receiptHandle string) error {
 	_, err := q.sqsClient.DeleteMessageWithContext(context.TODO(), &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(q.URL),
@@ -147,7 +148,7 @@ func (q *Queue) deleteMessage(receiptHandle string) error {
 	return nil
 }
 
-// Unsubscribe queue from the SNS topic
+// Unsubscribe the SQS queue from any topic it was subscribed to.
 func (q *Queue) Unsubscribe() error {
 	_, err := q.snsClient.Unsubscribe(&sns.UnsubscribeInput{
 		SubscriptionArn: aws.String(q.subscriptionArn),
@@ -158,7 +159,7 @@ func (q *Queue) Unsubscribe() error {
 	return nil
 }
 
-// Delete the queue
+// Delete the SQS queue.
 func (q *Queue) Delete() error {
 	_, err := q.sqsClient.DeleteQueue(&sqs.DeleteQueueInput{
 		QueueUrl: aws.String(q.URL),
