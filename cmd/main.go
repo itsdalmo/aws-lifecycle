@@ -70,8 +70,9 @@ func main() {
 		}
 	}()
 
-	daemon := lifecycle.NewDaemon(cmd.InstanceID, cmd.TopicArn, log)
-	if err := daemon.Start(ctx, lifecycle.NewQueue(sess)); err != nil {
+	daemon := lifecycle.NewDaemon(cmd.InstanceID, cmd.TopicArn, lifecycle.NewQueue(sess), log)
+
+	if err := daemon.Start(ctx); err != nil {
 		log.Errorf("failed to start daemon: %s", err)
 		return
 	}
