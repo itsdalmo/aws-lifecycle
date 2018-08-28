@@ -131,7 +131,11 @@ func (q *Queue) getMessage(ctx context.Context) ([]*Message, error) {
 		return nil, err
 	}
 	for _, m := range out.Messages {
-		messages = append(messages, newMessage(m))
+		msg, err := newMessage(m)
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, msg)
 	}
 	return messages, nil
 }

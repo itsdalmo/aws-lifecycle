@@ -3,6 +3,7 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"sync"
 
 	"github.com/sirupsen/logrus"
 )
@@ -14,6 +15,7 @@ type Daemon struct {
 
 	queue *Queue
 	log   *logrus.Entry
+	wg    sync.WaitGroup
 }
 
 // NewDaemon creates a new daemon for handling lifecycle events
@@ -56,16 +58,23 @@ func (d *Daemon) Start(ctx context.Context) error {
 
 	// Listen for new messages
 	messages := make(chan *Message)
-	go d.Listen(ctx, messages)
-	d.log.Info("started listener...")
 
-	// Handle new messages
-	d.Handle(ctx, messages)
+	go d.Listen(ctx, messages)
+	d.log.Debug("started listener...")
+	d.wg.Add(1)
+
+	go d.Process(ctx, messages)
+	d.log.Debug("started handler...")
+	d.wg.Add(1)
+
+	// Wait until all processes have completed before returning
+	d.wg.Wait()
 	return nil
 }
 
-// Listen for new messages
+// Listen polls SQS for new messages
 func (d *Daemon) Listen(ctx context.Context, messages chan<- *Message) {
+	defer d.wg.Done()
 	defer close(messages)
 
 	for {
@@ -77,24 +86,27 @@ func (d *Daemon) Listen(ctx context.Context, messages chan<- *Message) {
 			d.log.Debug("requesting new messages")
 			out, err := d.queue.getMessage(ctx)
 			if err != nil {
-				d.log.Warnf("failed to get messages: %s", err)
+				d.log.WithError(err).Warn("failed to get message")
 			}
 			for _, m := range out {
 				messages <- m
+				if err := d.queue.deleteMessage(m.ReceiptHandle); err != nil {
+					d.log.WithError(err).Warn("failed to delete message")
+				}
 			}
 		}
 	}
 }
 
-// Handle new messages
-func (d *Daemon) Handle(ctx context.Context, messages <-chan *Message) {
+// Process the SQS messages
+func (d *Daemon) Process(ctx context.Context, messages <-chan *Message) {
+	defer d.wg.Done()
+
 	for m := range messages {
-		d.log.Debugf("got message: %s", m.ReceiptHandle)
-		d.log.Debugf("message content: '%s'", m.Body)
-		d.log.Debug("deleting message")
-		if err := d.queue.deleteMessage(m.ReceiptHandle); err != nil {
-			d.log.Warnf("failed to delete message: %s", err)
+		if m.InstanceID != d.instanceID || m.Transition != "autoscaling:EC2_INSTANCE_TERMINATING" {
+			d.log.Infof("skipping notice: %s with target: %s", m.Transition, m.InstanceID)
 		}
+		d.log.Debug("DO SOME STUFF!")
 	}
 	d.log.Debug("stopping handler...")
 }
