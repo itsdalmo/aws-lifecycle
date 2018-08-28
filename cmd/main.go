@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 
+	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
@@ -25,7 +26,6 @@ func main() {
 		logger *logrus.Logger
 	)
 
-	// Parse CLI flags
 	_, err := flags.Parse(&cmd)
 	if err != nil {
 		if flagsErr, ok := err.(*flags.Error); ok && flagsErr.Type == flags.ErrHelp {
@@ -42,12 +42,20 @@ func main() {
 	if cmd.Verbose {
 		logger.SetLevel(logrus.DebugLevel)
 	}
-	log := logger.WithField("instanceId", cmd.InstanceID)
 
 	sess, err := session.NewSession()
 	if err != nil {
-		log.Fatalf("failed to create a new session: %s", err)
+		logger.WithError(err).Fatal("failed to create a new session")
 	}
+
+	if cmd.InstanceID == "" {
+		id, err := ec2metadata.New(sess).GetMetadata("instance-id")
+		if err != nil {
+			logger.WithError(err).Fatal("failed to get instance id from ec2 metadata")
+		}
+		cmd.InstanceID = id
+	}
+	log := logger.WithField("instanceId", cmd.InstanceID)
 
 	// Capture for interrupt signals in order to shut down gracefully
 	signals := make(chan os.Signal)
@@ -73,7 +81,8 @@ func main() {
 	daemon := lifecycle.NewDaemon(cmd.InstanceID, cmd.TopicArn, lifecycle.NewQueue(sess), log)
 
 	if err := daemon.Start(ctx); err != nil {
-		log.Errorf("failed to start daemon: %s", err)
+		// Not using fatal here because we want the deferred calls to run before exiting.
+		log.WithError(err).Error("failed to start daemon")
 		return
 	}
 }
