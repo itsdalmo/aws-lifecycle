@@ -3,28 +3,42 @@ package lifecycle
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
 	"sync"
+	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
+	"github.com/aws/aws-sdk-go/service/autoscaling/autoscalingiface"
 	"github.com/sirupsen/logrus"
 )
 
+// AutoscalingClient for testing purposes.
+//go:generate mockgen -destination=mocks/mock_autoscaling_client.go -package=mocks github.com/telia-oss/aws-lifecycle AutoscalingClient
+type AutoscalingClient autoscalingiface.AutoScalingAPI
+
 // Daemon is responsible for handling lifecycle actions.
 type Daemon struct {
+	handler    string
 	instanceID string
 	topicArn   string
 
-	queue *Queue
-	log   *logrus.Entry
-	wg    sync.WaitGroup
+	autoscalingClient AutoscalingClient
+	queue             *Queue
+	log               *logrus.Entry
+	wg                sync.WaitGroup
 }
 
 // NewDaemon creates a new daemon for handling lifecycle events
-func NewDaemon(instanceID, topicArn string, queue *Queue, log *logrus.Entry) *Daemon {
+func NewDaemon(handler string, instanceID, topicArn string, autoscaling AutoscalingClient, queue *Queue, log *logrus.Entry) *Daemon {
 	return &Daemon{
-		instanceID: instanceID,
-		topicArn:   topicArn,
-		queue:      queue,
-		log:        log,
+		handler:           handler,
+		instanceID:        instanceID,
+		topicArn:          topicArn,
+		autoscalingClient: autoscaling,
+		queue:             queue,
+		log:               log,
 	}
 }
 
@@ -64,11 +78,11 @@ func (d *Daemon) Start(ctx context.Context) error {
 	d.wg.Add(1)
 
 	go d.Process(ctx, messages)
-	d.log.Debug("started handler...")
+	d.log.Debug("started processor...")
 	d.wg.Add(1)
 
 	// Wait until all processes have completed before returning
-	d.log.Info("Daemon started successfully!")
+	d.log.Info("Daemon is running!")
 	d.wg.Wait()
 	return nil
 }
@@ -91,8 +105,8 @@ func (d *Daemon) Listen(ctx context.Context, messages chan<- *Message) {
 			}
 			for _, m := range out {
 				messages <- m
-				if err := d.queue.deleteMessage(m.ReceiptHandle); err != nil {
-					d.log.WithError(err).Warn("failed to delete message")
+				if err := d.queue.deleteMessage(ctx, m.ReceiptHandle); err != nil {
+					d.log.WithField("messageId", m.MessageID).WithError(err).Warn("failed to delete message")
 				}
 			}
 		}
@@ -104,10 +118,82 @@ func (d *Daemon) Process(ctx context.Context, messages <-chan *Message) {
 	defer d.wg.Done()
 
 	for m := range messages {
-		if m.InstanceID != d.instanceID || m.Transition != "autoscaling:EC2_INSTANCE_TERMINATING" {
-			d.log.Infof("skipping notice: %s with target: %s", m.Transition, m.InstanceID)
+		log := d.log.WithField("messageId", m.MessageID)
+		if m.InstanceID != d.instanceID {
+			log.Debugf("ignoring notice: target instance id does not match: %s", m.InstanceID)
+			continue
 		}
-		d.log.Info("DO SOME STUFF!")
+		if m.Transition != "autoscaling:EC2_INSTANCE_TERMINATING" {
+			log.Debugf("ignoring notice: not a termination notice: %s", m.Transition)
+			continue
+		}
+
+		log.Info("received termination notice")
+
+		// New context to stop heartbeating
+		heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
+		log.Info("starting heartbeat")
+		go d.heartbeat(heartbeatCtx, m, log)
+
+		log.Info("executing handler")
+		if err := d.executeHandler(ctx, log); err != nil {
+			log.WithError(err).Error("failed to execute handler")
+		} else {
+			log.Info("handler completed successfully")
+		}
+		cancelHeartbeat()
 	}
-	d.log.Debug("stopping handler...")
+	d.log.Debug("stopping processor...")
+}
+
+func (d *Daemon) executeHandler(ctx context.Context, log *logrus.Entry) error {
+	cmd := exec.Command(d.handler)
+	cmd.Env = os.Environ()
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+
+	finished := make(chan error)
+	go func() {
+		defer close(finished)
+		finished <- cmd.Wait()
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				if err := cmd.Process.Signal(os.Interrupt); err != nil {
+					log.WithError(err).Error("failed to interrupt execution of handler")
+				}
+			}
+			return nil
+		case err := <-finished:
+			return err
+		}
+	}
+}
+
+func (d *Daemon) heartbeat(ctx context.Context, m *Message, log *logrus.Entry) {
+	for {
+		select {
+		case <-ctx.Done():
+			log.Debug("stopping heartbeat")
+			return
+		case <-time.NewTicker(10 * time.Second).C:
+			log.Debug("sending heartbeat")
+			_, err := d.autoscalingClient.RecordLifecycleActionHeartbeat(&autoscaling.RecordLifecycleActionHeartbeatInput{
+				AutoScalingGroupName: aws.String(m.GroupName),
+				LifecycleHookName:    aws.String(m.HookName),
+				InstanceId:           aws.String(m.InstanceID),
+				LifecycleActionToken: aws.String(m.ActionToken),
+			})
+			if err != nil {
+				log.WithError(err).Error("failed to send heartbeat")
+			}
+		}
+	}
 }

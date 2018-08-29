@@ -15,11 +15,11 @@ import (
 )
 
 // SQSClient for testing purposes.
-//go:generate mockgen -destination=mocks/mock_sqs_client.go -package=mocks github.com/telia-oss/grawsful SMClient
+//go:generate mockgen -destination=mocks/mock_sqs_client.go -package=mocks github.com/telia-oss/aws-lifecycle SQSClient
 type SQSClient sqsiface.SQSAPI
 
 // SNSClient for testing purposes.
-//go:generate mockgen -destination=mocks/mock_sns_client.go -package=mocks github.com/telia-oss/grawsful SMClient
+//go:generate mockgen -destination=mocks/mock_sns_client.go -package=mocks github.com/telia-oss/aws-lifecycle SNSClient
 type SNSClient snsiface.SNSAPI
 
 const queuePolicyDocument = `
@@ -141,12 +141,15 @@ func (q *Queue) getMessage(ctx context.Context) ([]*Message, error) {
 }
 
 // deleteMessage from the SQS queue (given a receipt).
-func (q *Queue) deleteMessage(receiptHandle string) error {
-	_, err := q.sqsClient.DeleteMessageWithContext(context.TODO(), &sqs.DeleteMessageInput{
+func (q *Queue) deleteMessage(ctx context.Context, receiptHandle string) error {
+	_, err := q.sqsClient.DeleteMessageWithContext(ctx, &sqs.DeleteMessageInput{
 		QueueUrl:      aws.String(q.URL),
 		ReceiptHandle: aws.String(receiptHandle),
 	})
 	if err != nil {
+		if e, ok := err.(awserr.Error); ok && e.Code() == request.CanceledErrorCode {
+			return nil
+		}
 		return err
 	}
 	return nil

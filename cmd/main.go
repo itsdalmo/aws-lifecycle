@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"os"
+	"os/exec"
 	"os/signal"
 
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/autoscaling"
 	flags "github.com/jessevdk/go-flags"
 	"github.com/sirupsen/logrus"
 	lifecycle "github.com/telia-oss/aws-lifecycle"
@@ -14,7 +16,8 @@ import (
 
 // Command structure for the CLI
 type Command struct {
-	TopicArn    string `short:"t" long:"topic-arn" description:"The ARN of the SNS topic where lifecycle hooks are delivered." required:"true"`
+	Handler     string `long:"handler" description:"Path to a handler (script) that will be executed on termination notice." required:"true"`
+	TopicArn    string `short:"t" long:"sns-topic-arn" description:"The ARN of the SNS topic where lifecycle hooks are delivered." required:"true"`
 	InstanceID  string `short:"i" long:"instance-id" description:"The instance ID for which to listen for lifecycle hook events."`
 	JSONLogging bool   `short:"j" long:"json" description:"Enable JSON logging."`
 	Verbose     []bool `short:"v" long:"verbose" description:"Enable verbose (debug) logging."`
@@ -46,6 +49,12 @@ func main() {
 		logger.SetLevel(logrus.InfoLevel)
 	default:
 		logger.SetLevel(logrus.DebugLevel)
+	}
+
+	// Make sure the handler exists
+	cmd.Handler, err = exec.LookPath(cmd.Handler)
+	if err != nil {
+		logger.WithError(err).Fatal("invalid handler")
 	}
 
 	sess, err := session.NewSession()
@@ -83,7 +92,14 @@ func main() {
 		}
 	}()
 
-	daemon := lifecycle.NewDaemon(cmd.InstanceID, cmd.TopicArn, lifecycle.NewQueue(sess), log)
+	daemon := lifecycle.NewDaemon(
+		cmd.Handler,
+		cmd.InstanceID,
+		cmd.TopicArn,
+		autoscaling.New(sess),
+		lifecycle.NewQueue(sess),
+		log,
+	)
 
 	if err := daemon.Start(ctx); err != nil {
 		// Not using fatal here because we want the deferred calls to run before exiting.

@@ -11,8 +11,9 @@ import (
 
 // Message ...
 type Message struct {
-	Notification
+	MessageID     string
 	ReceiptHandle string
+	Notification
 }
 
 // Envelope ...
@@ -49,6 +50,7 @@ func newMessage(m *sqs.Message) (*Message, error) {
 	}
 
 	return &Message{
+		MessageID:     aws.StringValue(m.MessageId),
 		ReceiptHandle: aws.StringValue(m.ReceiptHandle),
 		Notification:  notification,
 	}, nil

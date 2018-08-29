@@ -2,7 +2,7 @@
 
 
 [[projects]]
-  digest = "1:49ff6564fc3d39abf5fa8dc60e987e3253bffc2ee7fa6f40e28481c0c8de3e68"
+  digest = "1:64bd9955931a214fdea6d868876d47d1c5f1f5eddeacb5435cca861f6ed08b86"
   name = "github.com/aws/aws-sdk-go"
   packages = [
     "aws",
@@ -31,6 +31,8 @@
     "private/protocol/query/queryutil",
     "private/protocol/rest",
     "private/protocol/xml/xmlutil",
+    "service/autoscaling",
+    "service/autoscaling/autoscalingiface",
     "service/sns",
     "service/sns/snsiface",
     "service/sqs",
@@ -97,8 +99,11 @@
   input-imports = [
     "github.com/aws/aws-sdk-go/aws",
     "github.com/aws/aws-sdk-go/aws/awserr",
+    "github.com/aws/aws-sdk-go/aws/ec2metadata",
     "github.com/aws/aws-sdk-go/aws/request",
     "github.com/aws/aws-sdk-go/aws/session",
+    "github.com/aws/aws-sdk-go/service/autoscaling/autoscalingiface",
+    "github.com/aws/aws-sdk-go/service/sns",
     "github.com/aws/aws-sdk-go/service/sns/snsiface",
     "github.com/aws/aws-sdk-go/service/sqs",
     "github.com/aws/aws-sdk-go/service/sqs/sqsiface",
