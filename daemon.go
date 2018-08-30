@@ -18,8 +18,8 @@ import (
 //go:generate mockgen -destination=mocks/mock_autoscaling_client.go -package=mocks github.com/telia-oss/aws-lifecycle AutoscalingClient
 type AutoscalingClient autoscalingiface.AutoScalingAPI
 
-// Handler ...
-type Handler struct {
+// Daemon ...
+type Daemon struct {
 	handler    string
 	instanceID string
 	topicArn   string
@@ -29,16 +29,16 @@ type Handler struct {
 	logger            *logrus.Logger
 }
 
-// NewHandler ...
-func NewHandler(
+// NewDaemon ...
+func NewDaemon(
 	handler string,
 	instanceID,
 	topicArn string,
 	autoscaling AutoscalingClient,
 	queue *Queue,
 	logger *logrus.Logger,
-) *Handler {
-	return &Handler{
+) *Daemon {
+	return &Daemon{
 		handler:           handler,
 		instanceID:        instanceID,
 		topicArn:          topicArn,
@@ -48,8 +48,10 @@ func NewHandler(
 	}
 }
 
-// Listen ...
-func (d *Handler) Listen(ctx context.Context) (completeFunc func() error, err error) {
+// Start runs the daemon and only returns when a termination notice is received, or
+// the process is interrupted by a signal. In the first case, it returns a function
+// which can be used to signal that the lifecycle hook should proceed.
+func (d *Daemon) Start(ctx context.Context) (completeFunc func() error, err error) {
 	log := d.logger.WithField("instanceId", d.instanceID)
 
 	// Create the SQS queue
@@ -101,7 +103,7 @@ func (d *Handler) Listen(ctx context.Context) (completeFunc func() error, err er
 	return completeFunc, nil
 }
 
-func (d *Handler) poll(ctx context.Context, messages chan<- *Message, log *logrus.Entry) {
+func (d *Daemon) poll(ctx context.Context, messages chan<- *Message, log *logrus.Entry) {
 	defer close(messages)
 	defer log.Debug("stopped polling...")
 
@@ -136,7 +138,7 @@ func (d *Handler) poll(ctx context.Context, messages chan<- *Message, log *logru
 	}
 }
 
-func (d *Handler) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
+func (d *Daemon) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
 	log.Info("starting heartbeat")
 	defer log.Debug("stopping heartbeat...")
 	for range ticker.C {
@@ -153,7 +155,7 @@ func (d *Handler) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) 
 	}
 }
 
-func (d *Handler) execute(ctx context.Context, log *logrus.Entry) error {
+func (d *Daemon) execute(ctx context.Context, log *logrus.Entry) error {
 	log.Info("executing handler")
 	cmd := exec.Command(d.handler)
 	cmd.Env = os.Environ()
@@ -185,9 +187,9 @@ func (d *Handler) execute(ctx context.Context, log *logrus.Entry) error {
 	}
 }
 
-func (d *Handler) complete(m *Message, ticker *time.Ticker, log *logrus.Entry) func() error {
+func (d *Daemon) complete(m *Message, ticker *time.Ticker, log *logrus.Entry) func() error {
 	return func() error {
-		log.Info("completing lifecycle")
+		log.Info("signaling to proceed with lifecycle action")
 		defer ticker.Stop()
 
 		_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{

@@ -107,7 +107,7 @@ func main() {
 		}
 	}()
 
-	handler := lifecycle.NewHandler(
+	daemon := lifecycle.NewDaemon(
 		cmd.Handler,
 		cmd.InstanceID,
 		cmd.TopicArn,
@@ -116,12 +116,12 @@ func main() {
 		logger,
 	)
 
-	complete, err := handler.Listen(ctx)
+	proceed, err := daemon.Start(ctx)
 	if err != nil {
-		logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("daemon failed")
+		logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("daemon error")
 	}
-	if complete != nil {
-		if err := complete(); err != nil {
+	if proceed != nil {
+		if err := proceed(); err != nil {
 			logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("failed to complete lifecycle action")
 		}
 	}
