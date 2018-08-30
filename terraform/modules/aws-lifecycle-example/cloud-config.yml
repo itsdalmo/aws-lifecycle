@@ -1,0 +1,103 @@
+#cloud-config
+package_update: true
+packages:
+  - awslogs
+  - aws-cfn-bootstrap
+write_files:
+  - path: "/etc/awslogs/awscli.template"
+    permissions: "0644"
+    owner: "root"
+    content: |
+      [plugins]
+      cwlogs = cwlogs
+      [default]
+      region = ${region}
+  - path: "/etc/awslogs/awslogs.template"
+    permissions: "0644"
+    owner: "root"
+    content: |
+      [general]
+      state_file = /var/lib/awslogs/aws-lifecycle-state
+
+      [/var/log/aws-lifecycle.log]
+      file = /var/log/aws-lifecycle.log
+      log_group_name = ${log_group_name}
+      log_stream_name = {instance_id}
+  - path: "/etc/systemd/system/aws-lifecycle-logging.service"
+    permissions: "0644"
+    owner: "root"
+    content: |
+      [Unit]
+      Description=Service for AWS Lifecycle logging
+      After=rc-local.service
+      [Service]
+      Type=simple
+      Restart=always
+      TimeoutSec=infinity
+      ExecStart=/bin/bash -c '/usr/bin/journalctl -u aws-lifecycle --no-tail -f -o cat > /var/log/aws-lifecycle.log'
+      [Install]
+      WantedBy=multi-user.target
+  - path: "/etc/systemd/system/aws-lifecycle.service"
+    permissions: "0644"
+    owner: "root"
+    content: |
+      [Unit]
+      Description=Service for AWS lifecycle
+      Requires=network-online.target
+      After=network-online.target
+
+      [Service]
+      Type=simple
+      Restart=always
+      TimeoutSec=infinity
+
+      Environment="AWS_REGION=${region}"
+      ExecStart=/usr/local/bin/aws-lifecycle -vvv --json --sns-topic-arn=${lifecycle_topic} --handler=/usr/local/scripts/lifecycle-handler.sh
+
+      [Install]
+      WantedBy=multi-user.target
+  - path: "/usr/local/scripts/cloudformation-signal.sh"
+    permissions: "0744"
+    owner: "root"
+    content: |
+      #! /usr/bin/bash
+
+      set -euo pipefail
+
+      function await_unit() {
+        echo -n "Waiting for $1..."
+        while ! systemctl is-active $1 > /dev/null; do
+            sleep 1
+        done
+        echo "Done!"
+      }
+
+      await_unit aws-lifecycle-logging.service
+      await_unit aws-lifecycle.service
+  - path: "/usr/local/scripts/lifecycle-handler.sh"
+    permissions: "0744"
+    owner: "root"
+    content: |
+      #! /usr/bin/bash
+
+      set -euo pipefail
+
+      echo "hello from the handler"
+      sleep 60
+      echo "exiting handler"
+runcmd:
+  - | 
+    aws s3 cp s3://${artifact_bucket}/${artifact_key} /usr/local/bin/aws-lifecycle
+    chmod +x /usr/local/bin/aws-lifecycle
+    chown root:root /usr/local/bin/aws-lifecycle
+    echo "aws-lifecycle ${artifact_etag} installed"
+  - |
+    cp /etc/awslogs/awscli.template /etc/awslogs/awscli.conf
+    cp /etc/awslogs/awslogs.template /etc/awslogs/awslogs.conf
+  - |
+    systemctl enable awslogsd.service --now
+    systemctl enable aws-lifecycle-logging.service --now
+    systemctl enable aws-lifecycle.service --now
+  - |
+    /usr/local/scripts/cloudformation-signal.sh
+    /opt/aws/bin/cfn-signal -e $? --stack ${stack_name} --resource AutoScalingGroup --region ${region}

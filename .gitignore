@@ -1,5 +1,9 @@
 # Binary
-aws-lifecycle*
+/aws-lifecycle*
 
 # Vendor
 vendor/*
+
+# Terraform
+**/.terraform/*
+*.tfstate*

@@ -34,6 +34,10 @@ release: test
 	@echo "== Release build =="
 	CGO_ENABLED=0 GOOS=$(TARGET) GOARCH=$(ARCH) go build -ldflags="-s -w" -o $(BINARY_NAME)-$(TARGET)-$(ARCH)$(EXT) -v cmd/main.go
 
+linux: test
+	@echo "== Linux artifact =="
+	CGO_ENABLED=0 GOOS=linux GOARCH=$(ARCH) go build -ldflags="-s -w" -o $(BINARY_NAME)-linux-$(ARCH)$(EXT) -v cmd/main.go
+
 clean:
 	@echo "== Cleaning =="
 	rm $(BINARY_NAME)* || true
