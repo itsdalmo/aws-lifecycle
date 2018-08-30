@@ -49,14 +49,14 @@ func NewHandler(
 }
 
 // Listen ...
-func (d *Handler) Listen(ctx context.Context) error {
+func (d *Handler) Listen(ctx context.Context) (completeFunc func() error, err error) {
 	log := d.logger.WithField("instanceId", d.instanceID)
 
 	// Create the SQS queue
 	queueName := fmt.Sprintf("aws-lifecycle-%s", d.instanceID)
 	log.WithField("queueName", queueName).Info("creating queue")
 	if err := d.queue.Create(queueName, d.topicArn); err != nil {
-		return fmt.Errorf("failed to create queue: %s", err)
+		return completeFunc, fmt.Errorf("failed to create queue: %s", err)
 	}
 	defer func() {
 		log.WithField("queueName", queueName).Info("deleting queue")
@@ -68,7 +68,7 @@ func (d *Handler) Listen(ctx context.Context) error {
 	// Subscribe to the STS topic
 	log.WithField("topicArn", d.topicArn).Info("subscribing to topic")
 	if err := d.queue.Subscribe(d.topicArn); err != nil {
-		return fmt.Errorf("failed to subscribe to the sns topic: %s", err)
+		return completeFunc, fmt.Errorf("failed to subscribe to the sns topic: %s", err)
 	}
 	defer func() {
 		log.WithField("topicArn", d.topicArn).Info("unsubscribing from topic")
@@ -77,39 +77,28 @@ func (d *Handler) Listen(ctx context.Context) error {
 		}
 	}()
 
-	messages := make(chan *Message)
-
 	// Listen for new messages
+	messages := make(chan *Message)
 	go d.poll(ctx, messages, log)
 	log.Info("listening for termination notices")
 
 	// Process termination notices
 	for m := range messages {
 		log := log.WithField("messageId", m.MessageID)
-		log.Info("received termination notice")
 
-		log.Info("starting heartbeat")
 		ticker := time.NewTicker(10 * time.Second)
 		go d.heartbeat(ticker, m, log)
 
-		log.Info("executing handler")
 		if err := d.execute(ctx, log); err != nil {
 			log.WithError(err).Error("failed to execute handler")
 		} else {
 			log.Info("handler completed successfully")
 		}
 
-		log.Info("completing lifecycle")
-		if err := d.complete(m); err != nil {
-			log.WithError(err).Error("failed to signal lifecycle")
-		}
-		log.Info("signaled lifecycle to continue")
-
-		// The listener having stopped will bring us out of the loop
-		ticker.Stop()
+		completeFunc = d.complete(m, ticker, log)
 	}
 
-	return nil
+	return completeFunc, nil
 }
 
 func (d *Handler) poll(ctx context.Context, messages chan<- *Message, log *logrus.Entry) {
@@ -139,6 +128,7 @@ func (d *Handler) poll(ctx context.Context, messages chan<- *Message, log *logru
 					log.Debugf("ignoring notice: not a termination notice: %s", m.Transition)
 					continue
 				}
+				log.Info("received termination notice")
 				messages <- m
 				return
 			}
@@ -147,6 +137,7 @@ func (d *Handler) poll(ctx context.Context, messages chan<- *Message, log *logru
 }
 
 func (d *Handler) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
+	log.Info("starting heartbeat")
 	defer log.Debug("stopping heartbeat...")
 	for range ticker.C {
 		log.Debug("sending heartbeat")
@@ -163,6 +154,7 @@ func (d *Handler) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) 
 }
 
 func (d *Handler) execute(ctx context.Context, log *logrus.Entry) error {
+	log.Info("executing handler")
 	cmd := exec.Command(d.handler)
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stderr
@@ -193,13 +185,18 @@ func (d *Handler) execute(ctx context.Context, log *logrus.Entry) error {
 	}
 }
 
-func (d *Handler) complete(m *Message) error {
-	_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{
-		AutoScalingGroupName:  aws.String(m.GroupName),
-		LifecycleHookName:     aws.String(m.HookName),
-		InstanceId:            aws.String(m.InstanceID),
-		LifecycleActionToken:  aws.String(m.ActionToken),
-		LifecycleActionResult: aws.String("CONTINUE"),
-	})
-	return err
+func (d *Handler) complete(m *Message, ticker *time.Ticker, log *logrus.Entry) func() error {
+	return func() error {
+		log.Info("completing lifecycle")
+		defer ticker.Stop()
+
+		_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{
+			AutoScalingGroupName:  aws.String(m.GroupName),
+			LifecycleHookName:     aws.String(m.HookName),
+			InstanceId:            aws.String(m.InstanceID),
+			LifecycleActionToken:  aws.String(m.ActionToken),
+			LifecycleActionResult: aws.String("CONTINUE"),
+		})
+		return err
+	}
 }

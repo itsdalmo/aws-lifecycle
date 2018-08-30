@@ -54,10 +54,11 @@ func main() {
 		logger.SetLevel(logrus.DebugLevel)
 	}
 	if cmd.LogFile != "" {
-		f, err := os.OpenFile(cmd.LogFile, os.O_WRONLY|os.O_CREATE, 0755)
+		f, err := os.OpenFile(cmd.LogFile, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0755)
 		if err != nil {
 			logger.WithError(err).Fatal("could not open log file")
 		}
+		defer f.Close()
 		mw := io.MultiWriter(os.Stdout, f)
 		logger.SetOutput(mw)
 	}
@@ -87,9 +88,8 @@ func main() {
 	defer close(signals)
 
 	signal.Notify(signals,
-		syscall.SIGKILL,
-		syscall.SIGTERM,
 		syscall.SIGINT,
+		syscall.SIGTERM,
 	)
 	defer signal.Stop(signals)
 
@@ -116,7 +116,13 @@ func main() {
 		logger,
 	)
 
-	if err := handler.Listen(ctx); err != nil {
-		logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("failed to start daemon")
+	complete, err := handler.Listen(ctx)
+	if err != nil {
+		logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("daemon failed")
+	}
+	if complete != nil {
+		if err := complete(); err != nil {
+			logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("failed to complete lifecycle action")
+		}
 	}
 }

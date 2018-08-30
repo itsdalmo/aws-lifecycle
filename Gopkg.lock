@@ -2,7 +2,7 @@
 
 
 [[projects]]
-  digest = "1:64bd9955931a214fdea6d868876d47d1c5f1f5eddeacb5435cca861f6ed08b86"
+  digest = "1:e95798f57587d062b1c68d58af3ab4d91494e8172514d2179039a7766d3e0a99"
   name = "github.com/aws/aws-sdk-go"
   packages = [
     "aws",
@@ -40,8 +40,8 @@
     "service/sts",
   ]
   pruneopts = "UT"
-  revision = "4324bc9d8865bdb3e6aa86ec7772ca1272d2750e"
-  version = "v1.15.21"
+  revision = "7715ed93fca215da2c707088a0cca5646ad91543"
+  version = "v1.15.24"
 
 [[projects]]
   digest = "1:5abd6a22805b1919f6a6bca0ae58b13cef1f3412812f38569978f43ef02743d4"
@@ -84,14 +84,14 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:0dafafed83f125cdc945a014b2dec15e5b5d8cd2d77a2d1e3763120b08ab381b"
+  digest = "1:9c99029818a3d4f53bcfd6c0158ca068aeacfecb29283f82a1f9c79b8d2a7da4"
   name = "golang.org/x/sys"
   packages = [
     "unix",
     "windows",
   ]
   pruneopts = "UT"
-  revision = "4910a1d54f876d7b22162a85f4d066d3ee649450"
+  revision = "d99a578cf41bfccdeaf48b0845c823a4b8b0ad5e"
 
 [solve-meta]
   analyzer-name = "dep"
@@ -102,6 +102,7 @@
     "github.com/aws/aws-sdk-go/aws/ec2metadata",
     "github.com/aws/aws-sdk-go/aws/request",
     "github.com/aws/aws-sdk-go/aws/session",
+    "github.com/aws/aws-sdk-go/service/autoscaling",
     "github.com/aws/aws-sdk-go/service/autoscaling/autoscalingiface",
     "github.com/aws/aws-sdk-go/service/sns",
     "github.com/aws/aws-sdk-go/service/sns/snsiface",
