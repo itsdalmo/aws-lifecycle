@@ -34,7 +34,7 @@ type Notification struct {
 	HookName    string    `json:"LifecycleHookName"`
 }
 
-// newMessage
+// newMessage ...
 func newMessage(m *sqs.Message) (*Message, error) {
 	var (
 		envelope     Envelope

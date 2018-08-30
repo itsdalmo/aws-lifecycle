@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"io"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -21,7 +22,8 @@ type Command struct {
 	TopicArn    string `short:"t" long:"sns-topic-arn" description:"The ARN of the SNS topic where lifecycle hooks are delivered." required:"true"`
 	InstanceID  string `short:"i" long:"instance-id" description:"The instance ID for which to listen for lifecycle hook events."`
 	JSONLogging bool   `short:"j" long:"json" description:"Enable JSON logging."`
-	Verbose     []bool `short:"v" long:"verbose" description:"Enable verbose (debug) logging."`
+	LogFile     string `short:"l" long:"log-file" description:"Write logs to a file."`
+	Verbosity   []bool `short:"v" long:"verbosity" description:"Control verbosity of logs."`
 }
 
 func main() {
@@ -43,13 +45,21 @@ func main() {
 	if cmd.JSONLogging {
 		logger.Formatter = &logrus.JSONFormatter{}
 	}
-	switch len(cmd.Verbose) {
+	switch len(cmd.Verbosity) {
 	case 0:
 		logger.SetLevel(logrus.WarnLevel)
 	case 1:
 		logger.SetLevel(logrus.InfoLevel)
 	default:
 		logger.SetLevel(logrus.DebugLevel)
+	}
+	if cmd.LogFile != "" {
+		f, err := os.OpenFile(cmd.LogFile, os.O_WRONLY|os.O_CREATE, 0755)
+		if err != nil {
+			logger.WithError(err).Fatal("could not open log file")
+		}
+		mw := io.MultiWriter(os.Stdout, f)
+		logger.SetOutput(mw)
 	}
 
 	// Make sure the handler exists
@@ -71,7 +81,6 @@ func main() {
 		}
 		cmd.InstanceID = id
 	}
-	log := logger.WithField("instanceId", cmd.InstanceID)
 
 	// Capture for interrupt signals in order to shut down gracefully
 	signals := make(chan os.Signal)
@@ -92,24 +101,22 @@ func main() {
 
 	go func() {
 		for s := range signals {
-			log.Infof("got signal (%s) shutting down...", s)
+			logger.WithField("instanceId", cmd.InstanceID).Infof("got signal (%s) shutting down...", s)
 			cancel()
 			break
 		}
 	}()
 
-	daemon := lifecycle.NewDaemon(
+	handler := lifecycle.NewHandler(
 		cmd.Handler,
 		cmd.InstanceID,
 		cmd.TopicArn,
 		autoscaling.New(sess),
 		lifecycle.NewQueue(sess),
-		log,
+		logger,
 	)
 
-	if err := daemon.Start(ctx); err != nil {
-		// Not using fatal here because we want the deferred calls to run before exiting.
-		log.WithError(err).Error("failed to start daemon")
-		return
+	if err := handler.Listen(ctx); err != nil {
+		logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("failed to start daemon")
 	}
 }

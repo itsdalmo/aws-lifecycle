@@ -23,20 +23,6 @@ write_files:
       file = /var/log/aws-lifecycle.log
       log_group_name = ${log_group_name}
       log_stream_name = {instance_id}
-  - path: "/etc/systemd/system/aws-lifecycle-logging.service"
-    permissions: "0644"
-    owner: "root"
-    content: |
-      [Unit]
-      Description=Service for AWS Lifecycle logging
-      After=rc-local.service
-      [Service]
-      Type=simple
-      Restart=always
-      TimeoutSec=infinity
-      ExecStart=/bin/bash -c '/usr/bin/journalctl -u aws-lifecycle --no-tail -f -o cat > /var/log/aws-lifecycle.log'
-      [Install]
-      WantedBy=multi-user.target
   - path: "/etc/systemd/system/aws-lifecycle.service"
     permissions: "0644"
     owner: "root"
@@ -52,7 +38,7 @@ write_files:
       TimeoutSec=infinity
 
       Environment="AWS_REGION=${region}"
-      ExecStart=/usr/local/bin/aws-lifecycle -vvv --json --sns-topic-arn=${lifecycle_topic} --handler=/usr/local/scripts/lifecycle-handler.sh
+      ExecStart=/usr/local/bin/aws-lifecycle -vvv --json --sns-topic-arn=${lifecycle_topic} --handler=/usr/local/scripts/lifecycle-handler.sh --log-file=/var/log/aws-lifecycle.log
 
       [Install]
       WantedBy=multi-user.target
@@ -72,7 +58,6 @@ write_files:
         echo "Done!"
       }
 
-      await_unit aws-lifecycle-logging.service
       await_unit aws-lifecycle.service
   - path: "/usr/local/scripts/lifecycle-handler.sh"
     permissions: "0744"
@@ -96,7 +81,6 @@ runcmd:
     cp /etc/awslogs/awslogs.template /etc/awslogs/awslogs.conf
   - |
     systemctl enable awslogsd.service --now
-    systemctl enable aws-lifecycle-logging.service --now
     systemctl enable aws-lifecycle.service --now
   - |
     /usr/local/scripts/cloudformation-signal.sh

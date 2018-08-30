@@ -18,66 +18,74 @@ import (
 //go:generate mockgen -destination=mocks/mock_autoscaling_client.go -package=mocks github.com/telia-oss/aws-lifecycle AutoscalingClient
 type AutoscalingClient autoscalingiface.AutoScalingAPI
 
-// Daemon is responsible for handling lifecycle actions.
-type Daemon struct {
+// Handler ...
+type Handler struct {
 	handler    string
 	instanceID string
 	topicArn   string
 
 	autoscalingClient AutoscalingClient
 	queue             *Queue
-	log               *logrus.Entry
+	logger            *logrus.Logger
 }
 
-// NewDaemon creates a new daemon for handling lifecycle events
-func NewDaemon(handler string, instanceID, topicArn string, autoscaling AutoscalingClient, queue *Queue, log *logrus.Entry) *Daemon {
-	return &Daemon{
+// NewHandler ...
+func NewHandler(
+	handler string,
+	instanceID,
+	topicArn string,
+	autoscaling AutoscalingClient,
+	queue *Queue,
+	logger *logrus.Logger,
+) *Handler {
+	return &Handler{
 		handler:           handler,
 		instanceID:        instanceID,
 		topicArn:          topicArn,
 		autoscalingClient: autoscaling,
 		queue:             queue,
-		log:               log,
+		logger:            logger,
 	}
 }
 
-// Start the daemon
-func (d *Daemon) Start(ctx context.Context) error {
-	queueName := fmt.Sprintf("aws-lifecycle-%s", d.instanceID)
+// Listen ...
+func (d *Handler) Listen(ctx context.Context) error {
+	log := d.logger.WithField("instanceId", d.instanceID)
 
 	// Create the SQS queue
-	d.log.WithField("queueName", queueName).Info("creating queue")
+	queueName := fmt.Sprintf("aws-lifecycle-%s", d.instanceID)
+	log.WithField("queueName", queueName).Info("creating queue")
 	if err := d.queue.Create(queueName, d.topicArn); err != nil {
 		return fmt.Errorf("failed to create queue: %s", err)
 	}
 	defer func() {
-		d.log.WithField("queueName", queueName).Info("deleting queue")
+		log.WithField("queueName", queueName).Info("deleting queue")
 		if err := d.queue.Delete(); err != nil {
-			d.log.WithError(err).Error("failed to delete queue")
+			log.WithField("queueName", queueName).WithError(err).Error("failed to delete queue")
 		}
 	}()
 
 	// Subscribe to the STS topic
-	d.log.WithField("topicArn", d.topicArn).Info("subscribing to topic")
+	log.WithField("topicArn", d.topicArn).Info("subscribing to topic")
 	if err := d.queue.Subscribe(d.topicArn); err != nil {
 		return fmt.Errorf("failed to subscribe to the sns topic: %s", err)
 	}
 	defer func() {
-		d.log.WithField("topicArn", d.topicArn).Info("unsubscribing from topic")
+		log.WithField("topicArn", d.topicArn).Info("unsubscribing from topic")
 		if err := d.queue.Unsubscribe(); err != nil {
-			d.log.WithError(err).Error("failed to unsubscribe from sns topic")
+			log.WithField("topicArn", d.topicArn).WithError(err).Error("failed to unsubscribe from sns topic")
 		}
 	}()
 
 	messages := make(chan *Message)
 
 	// Listen for new messages
-	go d.listen(ctx, messages)
-	d.log.Debug("listening for termination notice")
+	go d.poll(ctx, messages, log)
+	log.Info("listening for termination notices")
 
 	// Process termination notices
 	for m := range messages {
-		log := d.log.WithField("messageId", m.MessageID)
+		log := log.WithField("messageId", m.MessageID)
 		log.Info("received termination notice")
 
 		log.Info("starting heartbeat")
@@ -104,23 +112,22 @@ func (d *Daemon) Start(ctx context.Context) error {
 	return nil
 }
 
-// listen polls SQS for new messages and passes termination notices to the given channel
-func (d *Daemon) listen(ctx context.Context, messages chan<- *Message) {
+func (d *Handler) poll(ctx context.Context, messages chan<- *Message, log *logrus.Entry) {
 	defer close(messages)
-	defer d.log.Debug("stopping listener...")
+	defer log.Debug("stopped polling...")
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		default:
-			d.log.Debug("requesting new messages")
+			log.Debug("requesting new messages")
 			out, err := d.queue.getMessage(ctx)
 			if err != nil {
-				d.log.WithError(err).Warn("failed to get messages")
+				log.WithError(err).Warn("failed to get messages")
 			}
 			for _, m := range out {
-				log := d.log.WithField("messageId", m.MessageID)
+				log := log.WithField("messageId", m.MessageID)
 				if err := d.queue.deleteMessage(ctx, m.ReceiptHandle); err != nil {
 					log.WithError(err).Warn("failed to delete message")
 				}
@@ -139,8 +146,8 @@ func (d *Daemon) listen(ctx context.Context, messages chan<- *Message) {
 	}
 }
 
-func (d *Daemon) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
-	defer d.log.Debug("stopping heartbeat...")
+func (d *Handler) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
+	defer log.Debug("stopping heartbeat...")
 	for range ticker.C {
 		log.Debug("sending heartbeat")
 		_, err := d.autoscalingClient.RecordLifecycleActionHeartbeat(&autoscaling.RecordLifecycleActionHeartbeatInput{
@@ -155,7 +162,7 @@ func (d *Daemon) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
 	}
 }
 
-func (d *Daemon) execute(ctx context.Context, log *logrus.Entry) error {
+func (d *Handler) execute(ctx context.Context, log *logrus.Entry) error {
 	cmd := exec.Command(d.handler)
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stderr
@@ -186,7 +193,7 @@ func (d *Daemon) execute(ctx context.Context, log *logrus.Entry) error {
 	}
 }
 
-func (d *Daemon) complete(m *Message) error {
+func (d *Handler) complete(m *Message) error {
 	_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{
 		AutoScalingGroupName:  aws.String(m.GroupName),
 		LifecycleHookName:     aws.String(m.HookName),
