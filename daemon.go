@@ -141,7 +141,13 @@ func (d *Daemon) Process(ctx context.Context, messages <-chan *Message) {
 		} else {
 			log.Info("handler completed successfully")
 		}
+
+		if err := d.completeLifecycle(m); err != nil {
+			log.WithError(err).Error("failed to signal lifecycle")
+		}
+		log.Info("signaled lifecycle to continue")
 		cancelHeartbeat()
+
 	}
 	d.log.Debug("stopping processor...")
 }
@@ -196,4 +202,15 @@ func (d *Daemon) heartbeat(ctx context.Context, m *Message, log *logrus.Entry) {
 			}
 		}
 	}
+}
+
+func (d *Daemon) completeLifecycle(m *Message) error {
+	_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{
+		AutoScalingGroupName:  aws.String(m.GroupName),
+		LifecycleHookName:     aws.String(m.HookName),
+		InstanceId:            aws.String(m.InstanceID),
+		LifecycleActionToken:  aws.String(m.ActionToken),
+		LifecycleActionResult: aws.String("CONTINUE"),
+	})
+	return err
 }

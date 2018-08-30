@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"syscall"
 
 	"github.com/aws/aws-sdk-go/aws/ec2metadata"
 	"github.com/aws/aws-sdk-go/aws/session"
@@ -63,6 +64,7 @@ func main() {
 	}
 
 	if cmd.InstanceID == "" {
+		logger.Debug("getting instance id from ec2 metadata")
 		id, err := ec2metadata.New(sess).GetMetadata("instance-id")
 		if err != nil {
 			logger.WithError(err).Fatal("failed to get instance id from ec2 metadata")
@@ -75,7 +77,11 @@ func main() {
 	signals := make(chan os.Signal)
 	defer close(signals)
 
-	signal.Notify(signals, os.Interrupt)
+	signal.Notify(signals,
+		syscall.SIGKILL,
+		syscall.SIGTERM,
+		syscall.SIGINT,
+	)
 	defer signal.Stop(signals)
 
 	// Use context to unwind go-routines. Cancelling will tell the daemon
@@ -86,7 +92,7 @@ func main() {
 
 	go func() {
 		for s := range signals {
-			log.Infof("got signal (%s) shutting down...", s.String())
+			log.Infof("got signal (%s) shutting down...", s)
 			cancel()
 			break
 		}
