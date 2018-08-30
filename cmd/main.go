@@ -82,6 +82,7 @@ func main() {
 		}
 		cmd.InstanceID = id
 	}
+	log := logger.WithField("instanceId", cmd.InstanceID)
 
 	// Capture for interrupt signals in order to shut down gracefully
 	signals := make(chan os.Signal)
@@ -101,7 +102,7 @@ func main() {
 
 	go func() {
 		for s := range signals {
-			logger.WithField("instanceId", cmd.InstanceID).Infof("got signal (%s) shutting down...", s)
+			log.Infof("got signal (%s) shutting down...", s)
 			cancel()
 			break
 		}
@@ -111,18 +112,18 @@ func main() {
 		cmd.Handler,
 		cmd.InstanceID,
 		cmd.TopicArn,
-		autoscaling.New(sess),
 		lifecycle.NewQueue(sess),
-		logger,
+		autoscaling.New(sess),
 	)
 
-	proceed, err := daemon.Start(ctx)
+	proceed, err := daemon.Start(ctx, log)
 	if err != nil {
-		logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("daemon error")
+		log.WithError(err).Fatal("failed to start daemon")
 	}
 	if proceed != nil {
 		if err := proceed(); err != nil {
-			logger.WithField("instanceId", cmd.InstanceID).WithError(err).Fatal("failed to complete lifecycle action")
+			log.WithError(err).Fatal("failed to complete lifecycle action")
 		}
+		log.Info("lifecycle action completed successfully")
 	}
 }

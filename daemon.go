@@ -26,7 +26,6 @@ type Daemon struct {
 
 	autoscalingClient AutoscalingClient
 	queue             *Queue
-	logger            *logrus.Logger
 }
 
 // NewDaemon ...
@@ -34,26 +33,22 @@ func NewDaemon(
 	handler string,
 	instanceID,
 	topicArn string,
-	autoscaling AutoscalingClient,
 	queue *Queue,
-	logger *logrus.Logger,
+	autoscaling AutoscalingClient,
 ) *Daemon {
 	return &Daemon{
 		handler:           handler,
 		instanceID:        instanceID,
 		topicArn:          topicArn,
-		autoscalingClient: autoscaling,
 		queue:             queue,
-		logger:            logger,
+		autoscalingClient: autoscaling,
 	}
 }
 
 // Start runs the daemon and only returns when a termination notice is received, or
 // the process is interrupted by a signal. In the first case, it returns a function
 // which can be used to signal that the lifecycle hook should proceed.
-func (d *Daemon) Start(ctx context.Context) (completeFunc func() error, err error) {
-	log := d.logger.WithField("instanceId", d.instanceID)
-
+func (d *Daemon) Start(ctx context.Context, log *logrus.Entry) (completeFunc func() error, err error) {
 	// Create the SQS queue
 	queueName := fmt.Sprintf("aws-lifecycle-%s", d.instanceID)
 	log.WithField("queueName", queueName).Info("creating queue")
@@ -139,8 +134,7 @@ func (d *Daemon) poll(ctx context.Context, messages chan<- *Message, log *logrus
 }
 
 func (d *Daemon) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
-	log.Info("starting heartbeat")
-	defer log.Debug("stopping heartbeat...")
+	defer log.Debug("stopped heartbeat...")
 	for range ticker.C {
 		log.Debug("sending heartbeat")
 		_, err := d.autoscalingClient.RecordLifecycleActionHeartbeat(&autoscaling.RecordLifecycleActionHeartbeatInput{
@@ -189,7 +183,7 @@ func (d *Daemon) execute(ctx context.Context, log *logrus.Entry) error {
 
 func (d *Daemon) complete(m *Message, ticker *time.Ticker, log *logrus.Entry) func() error {
 	return func() error {
-		log.Info("signaling to proceed with lifecycle action")
+		log.Info("proceeding with lifecycle action")
 		defer ticker.Stop()
 
 		_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{
