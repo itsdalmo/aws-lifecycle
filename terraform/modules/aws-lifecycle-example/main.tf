@@ -48,8 +48,18 @@ module "asg" {
   min_size          = "${var.instance_count}"
   instance_type     = "${var.instance_type}"
   instance_ami      = "${var.instance_ami}"
-  instance_key      = ""
+  instance_key      = "${var.key_pair}"
   tags              = "${var.tags}"
+}
+
+resource "aws_security_group_rule" "ssh_ingress" {
+  count             = "${var.key_pair != "" ? 1 : 0}"
+  security_group_id = "${module.asg.security_group_id}"
+  type              = "ingress"
+  protocol          = "tcp"
+  from_port         = 22
+  to_port           = 22
+  cidr_blocks       = ["0.0.0.0/0"]
 }
 
 # Enable SSM agent for debugging purposes using: 

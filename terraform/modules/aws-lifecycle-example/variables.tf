@@ -10,6 +10,11 @@ variable "aws_lifecycle_path" {
   default     = "../aws-lifecycle-linux-amd64"
 }
 
+variable "key_pair" {
+  description = "Name of an EC2 key pair which will be allowed to SSH to the instance."
+  default     = ""
+}
+
 variable "vpc_id" {
   description = "ID of the VPC for the subnets."
 }

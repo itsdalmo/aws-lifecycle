@@ -53,6 +53,8 @@ module "aws-lifecycle-example" {
   instance_count = "1"
   instance_type  = "t3.micro"
 
+  key_pair = ""
+
   tags = {
     environment = "dev"
     terraform   = "True"
