@@ -34,12 +34,12 @@ write_files:
 
       [Service]
       Type=simple
-      Restart=always
-      TimeoutStopSec=infinity
+      Restart=on-failure
+      RestartSec=30s
+      TimeoutStopSec=5m
 
       Environment="AWS_REGION=${region}"
       ExecStart=/usr/local/bin/aws-lifecycle -vvv --json --sns-topic-arn=${lifecycle_topic} --handler=/usr/local/scripts/lifecycle-handler.sh --log-file=/var/log/aws-lifecycle.log
-      ExecStop=/bin/kill -15 $MAINPID
 
       [Install]
       WantedBy=multi-user.target
