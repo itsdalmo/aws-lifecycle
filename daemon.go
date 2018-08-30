@@ -2,10 +2,10 @@ package lifecycle
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -27,7 +27,6 @@ type Daemon struct {
 	autoscalingClient AutoscalingClient
 	queue             *Queue
 	log               *logrus.Entry
-	wg                sync.WaitGroup
 }
 
 // NewDaemon creates a new daemon for handling lifecycle events
@@ -70,89 +69,93 @@ func (d *Daemon) Start(ctx context.Context) error {
 		}
 	}()
 
-	// Listen for new messages
 	messages := make(chan *Message)
 
-	go d.Listen(ctx, messages)
-	d.log.Debug("started listener...")
-	d.wg.Add(1)
+	// Listen for new messages
+	go d.listen(ctx, messages)
+	d.log.Debug("listening for termination notice")
 
-	go d.Process(ctx, messages)
-	d.log.Debug("started processor...")
-	d.wg.Add(1)
-
-	// Wait until all processes have completed before returning
-	d.log.Info("Daemon is running!")
-	d.wg.Wait()
-	return nil
-}
-
-// Listen polls SQS for new messages
-func (d *Daemon) Listen(ctx context.Context, messages chan<- *Message) {
-	defer d.wg.Done()
-	defer close(messages)
-
-	for {
-		select {
-		case <-ctx.Done():
-			d.log.Debug("stopping listener...")
-			return
-		default:
-			d.log.Debug("requesting new messages")
-			out, err := d.queue.getMessage(ctx)
-			if err != nil {
-				d.log.WithError(err).Warn("failed to get message")
-			}
-			for _, m := range out {
-				messages <- m
-				if err := d.queue.deleteMessage(ctx, m.ReceiptHandle); err != nil {
-					d.log.WithField("messageId", m.MessageID).WithError(err).Warn("failed to delete message")
-				}
-			}
-		}
-	}
-}
-
-// Process the SQS messages
-func (d *Daemon) Process(ctx context.Context, messages <-chan *Message) {
-	defer d.wg.Done()
-
+	// Process termination notices
 	for m := range messages {
 		log := d.log.WithField("messageId", m.MessageID)
-		if m.InstanceID != d.instanceID {
-			log.Debugf("ignoring notice: target instance id does not match: %s", m.InstanceID)
-			continue
-		}
-		if m.Transition != "autoscaling:EC2_INSTANCE_TERMINATING" {
-			log.Debugf("ignoring notice: not a termination notice: %s", m.Transition)
-			continue
-		}
-
 		log.Info("received termination notice")
 
-		// New context to stop heartbeating
-		heartbeatCtx, cancelHeartbeat := context.WithCancel(ctx)
 		log.Info("starting heartbeat")
-		go d.heartbeat(heartbeatCtx, m, log)
+		ticker := time.NewTicker(10 * time.Second)
+		go d.heartbeat(ticker, m, log)
 
 		log.Info("executing handler")
-		if err := d.executeHandler(ctx, log); err != nil {
+		if err := d.execute(ctx, log); err != nil {
 			log.WithError(err).Error("failed to execute handler")
 		} else {
 			log.Info("handler completed successfully")
 		}
 
-		if err := d.completeLifecycle(m); err != nil {
+		log.Info("completing lifecycle")
+		if err := d.complete(m); err != nil {
 			log.WithError(err).Error("failed to signal lifecycle")
 		}
 		log.Info("signaled lifecycle to continue")
-		cancelHeartbeat()
 
+		// The listener having stopped will bring us out of the loop
+		ticker.Stop()
 	}
-	d.log.Debug("stopping processor...")
+
+	return nil
 }
 
-func (d *Daemon) executeHandler(ctx context.Context, log *logrus.Entry) error {
+// listen polls SQS for new messages and passes termination notices to the given channel
+func (d *Daemon) listen(ctx context.Context, messages chan<- *Message) {
+	defer close(messages)
+	defer d.log.Debug("stopping listener...")
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		default:
+			d.log.Debug("requesting new messages")
+			out, err := d.queue.getMessage(ctx)
+			if err != nil {
+				d.log.WithError(err).Warn("failed to get messages")
+			}
+			for _, m := range out {
+				log := d.log.WithField("messageId", m.MessageID)
+				if err := d.queue.deleteMessage(ctx, m.ReceiptHandle); err != nil {
+					log.WithError(err).Warn("failed to delete message")
+				}
+				if m.InstanceID != d.instanceID {
+					log.Debugf("ignoring notice: target instance id does not match: %s", m.InstanceID)
+					continue
+				}
+				if m.Transition != "autoscaling:EC2_INSTANCE_TERMINATING" {
+					log.Debugf("ignoring notice: not a termination notice: %s", m.Transition)
+					continue
+				}
+				messages <- m
+				return
+			}
+		}
+	}
+}
+
+func (d *Daemon) heartbeat(ticker *time.Ticker, m *Message, log *logrus.Entry) {
+	defer d.log.Debug("stopping heartbeat...")
+	for range ticker.C {
+		log.Debug("sending heartbeat")
+		_, err := d.autoscalingClient.RecordLifecycleActionHeartbeat(&autoscaling.RecordLifecycleActionHeartbeatInput{
+			AutoScalingGroupName: aws.String(m.GroupName),
+			LifecycleHookName:    aws.String(m.HookName),
+			InstanceId:           aws.String(m.InstanceID),
+			LifecycleActionToken: aws.String(m.ActionToken),
+		})
+		if err != nil {
+			log.WithError(err).Warn("failed to send heartbeat")
+		}
+	}
+}
+
+func (d *Daemon) execute(ctx context.Context, log *logrus.Entry) error {
 	cmd := exec.Command(d.handler)
 	cmd.Env = os.Environ()
 	cmd.Stdout = os.Stderr
@@ -176,35 +179,14 @@ func (d *Daemon) executeHandler(ctx context.Context, log *logrus.Entry) error {
 					log.WithError(err).Error("failed to interrupt execution of handler")
 				}
 			}
-			return nil
+			return errors.New("execution interrupted by cancelled context")
 		case err := <-finished:
 			return err
 		}
 	}
 }
 
-func (d *Daemon) heartbeat(ctx context.Context, m *Message, log *logrus.Entry) {
-	for {
-		select {
-		case <-ctx.Done():
-			log.Debug("stopping heartbeat")
-			return
-		case <-time.NewTicker(10 * time.Second).C:
-			log.Debug("sending heartbeat")
-			_, err := d.autoscalingClient.RecordLifecycleActionHeartbeat(&autoscaling.RecordLifecycleActionHeartbeatInput{
-				AutoScalingGroupName: aws.String(m.GroupName),
-				LifecycleHookName:    aws.String(m.HookName),
-				InstanceId:           aws.String(m.InstanceID),
-				LifecycleActionToken: aws.String(m.ActionToken),
-			})
-			if err != nil {
-				log.WithError(err).Error("failed to send heartbeat")
-			}
-		}
-	}
-}
-
-func (d *Daemon) completeLifecycle(m *Message) error {
+func (d *Daemon) complete(m *Message) error {
 	_, err := d.autoscalingClient.CompleteLifecycleAction(&autoscaling.CompleteLifecycleActionInput{
 		AutoScalingGroupName:  aws.String(m.GroupName),
 		LifecycleHookName:     aws.String(m.HookName),
